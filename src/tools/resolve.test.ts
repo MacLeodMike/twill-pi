@@ -168,14 +168,14 @@ describe("twill_resolve", () => {
   });
 });
 
-describe("extension factory (Task 2 wiring)", () => {
-  it("registers twill_resolve and twill_attach", () => {
+describe("extension factory (Task 3 wiring)", () => {
+  it("registers twill_resolve, twill_attach, and twill_claim", () => {
     const registered: string[] = [];
     twillPi({
       registerTool(tool: unknown) {
         registered.push((tool as { name: string }).name);
       },
     });
-    expect(registered).toEqual(["twill_resolve", "twill_attach"]);
+    expect(registered).toEqual(["twill_resolve", "twill_attach", "twill_claim"]);
   });
 });

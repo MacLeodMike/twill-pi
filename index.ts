@@ -3,13 +3,13 @@
 // build step); the default export is the extension factory pi calls with
 // its ExtensionAPI.
 //
-// Task 2 scope: the factory loads config, builds the RegistryClient +
+// Task 3 scope: the factory loads config, builds the RegistryClient +
 // consumer tuple + session WorkspaceState in its closure, and registers the
-// twill_resolve / twill_attach tools. Later tasks add twill_claim (Task 3,
-// closing over the same client/state) and the tool_call write guard
-// (Task 4, reading the same state). Per pi's lifecycle rules the factory
-// starts no processes, sockets, or timers — config load is a synchronous
-// file read.
+// twill_resolve / twill_attach / twill_claim tools (twill_claim closes over
+// the same client/consumer/state and reads claimTimeoutMs/pollIntervalMs
+// from the loaded config). Task 4 adds the tool_call write guard reading
+// the same state. Per pi's lifecycle rules the factory starts no
+// processes, sockets, or timers — config load is a synchronous file read.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
@@ -18,6 +18,7 @@
 import { consumerFromConfig, loadConfig, type TwillPiConfig } from "./src/config.js";
 import { RegistryClient } from "./src/registry-client.js";
 import { attachTool } from "./src/tools/attach.js";
+import { claimTool } from "./src/tools/claim.js";
 import { resolveTool } from "./src/tools/resolve.js";
 import { WorkspaceState } from "./src/workspace-state.js";
 
@@ -44,4 +45,10 @@ export default function twillPi(pi: ExtensionHost): void {
 
   pi.registerTool(resolveTool(client, consumer));
   pi.registerTool(attachTool(client, consumer, state));
+  pi.registerTool(
+    claimTool(client, consumer, state, {
+      claimTimeoutMs: config.claimTimeoutMs,
+      pollIntervalMs: config.pollIntervalMs,
+    }),
+  );
 }
