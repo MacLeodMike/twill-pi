@@ -152,6 +152,31 @@ describe("twill_attach", () => {
     expect(requests[0]!.body).toEqual({ kind: "Workspace", name: "payments-repo", consumer });
   });
 
+  it("local route: the summary states the write guard ENFORCES the root (Task 4)", async () => {
+    const { tool } = await makeTool();
+
+    const result = await tool.execute("call-l1", { kind: "Workspace", name: "payments-repo" }, undefined, undefined, undefined);
+
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).toContain("writes are confined to");
+    expect(text).toContain("write guard blocks escapes");
+  });
+
+  it("T2b-2: NON-LOCAL route: the summary says the guard is ADVISORY-ONLY (it cannot enforce a remote filesystem)", async () => {
+    canned["ssh-repo"] = attachedResult("ssh-repo", { routeType: "ssh" });
+    const { tool } = await makeTool();
+
+    const result = await tool.execute("call-l2", { kind: "Workspace", name: "ssh-repo" }, undefined, undefined, undefined);
+
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).not.toContain("the write guard blocks escapes");
+    expect(text).toMatch(/advisory/i);
+    expect(text).toContain("ssh");
+    delete canned["ssh-repo"];
+  });
+
   it("refuses a cold (ready:false) workspace and directs to twill_claim", async () => {
     const { tool, state } = await makeTool();
 

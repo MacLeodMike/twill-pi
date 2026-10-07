@@ -40,7 +40,7 @@ const DESCRIPTION = [
   "Attach a twill workspace to this session, making it the active workspace.",
   "Resolves the name through the twill fabric registry (a fresh resolve every call) and binds the selected route.",
   "Succeeds only when the workspace is ready (status.ready=true). On a cold workspace it refuses — call twill_claim to claim and materialize it, then attach again.",
-  "On success: writes are confined to the workspace root (the write guard enforces this), and the summary names the root — use root-relative paths from then on; pi's cwd does not change.",
+  "On success: writes are confined to the workspace root — the write guard enforces this for LOCAL routes; for non-local routes the guard is advisory-only (a local-process guard cannot see a remote filesystem). The summary names the root — use root-relative paths from then on; pi's cwd does not change.",
   "Attaching while another workspace is attached replaces it (the result notes the swap).",
   "If other consumers hold claims on the workspace (RWO advisory), the attach still succeeds but the result carries a WARNING naming the claimants.",
 ].join("\n");
@@ -138,12 +138,18 @@ export function attachTool(client: RegistryClient, consumer: Consumer, state: Wo
           ? `Replaced the previously attached workspace ${previous.name} (root ${previous.root}).\n`
           : "";
 
+      // The write-scope phrasing matches what the Task-4 guard actually
+      // enforces (T2b-2): local routes are confined-and-enforced; non-local
+      // routes are advisory-only — the guard cannot see a remote filesystem.
+      const isLocal = route["type"] === "local";
       const text = [
         warning,
         `${swap}Attached ${descriptor.kind}/${descriptor.name} (durable_id ${descriptor.durable_id ?? "(none)"}).`,
         `root: ${root}`,
-        `writes are confined to ${root} — use root-relative paths; the write guard blocks escapes.`,
-        `pi's cwd is unchanged; the guard enforces the root, not the shell's working directory.`,
+        isLocal
+          ? `writes are confined to ${root} — use root-relative paths; the write guard blocks escapes.`
+          : `writes should stay under ${root} — use root-relative paths; the write guard is advisory-only for non-local routes (type ${String(route["type"])}): it cannot see a remote filesystem.`,
+        `pi's cwd is unchanged; paths are confined by the guard (local routes), not the shell's working directory.`,
       ]
         .filter((line) => line !== null && line !== "")
         .join("\n");

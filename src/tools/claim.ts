@@ -315,12 +315,17 @@ export function claimTool(
             ? `Replaced the previously attached workspace ${previous.name} (root ${previous.root}).\n`
             : "";
 
+        // Same write-scope phrasing as twill_attach (T2b-2): the guard
+        // enforces only local routes; non-local routes are advisory-only.
+        const isLocal = route["type"] === "local";
         const text = [
           warning,
           `${swap}Claimed Workspace/${params.name} (claim ${claimName}); the materialized workspace reported ready after ${pollCount} poll(s).`,
           `Attached ${descriptor.kind}/${descriptor.name} (durable_id ${descriptor.durable_id ?? "(none)"}).`,
           `root: ${root}`,
-          `writes are confined to ${root} — use root-relative paths; the write guard blocks escapes.`,
+          isLocal
+            ? `writes are confined to ${root} — use root-relative paths; the write guard blocks escapes.`
+            : `writes should stay under ${root} — use root-relative paths; the write guard is advisory-only for non-local routes (type ${String(route["type"])}): it cannot see a remote filesystem.`,
         ]
           .filter((line) => line !== null && line !== "")
           .join("\n");

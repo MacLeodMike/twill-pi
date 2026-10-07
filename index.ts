@@ -7,15 +7,18 @@
 // consumer tuple + session WorkspaceState in its closure, and registers the
 // twill_resolve / twill_attach / twill_claim tools (twill_claim closes over
 // the same client/consumer/state and reads claimTimeoutMs/pollIntervalMs
-// from the loaded config). Task 4 adds the tool_call write guard reading
-// the same state. Per pi's lifecycle rules the factory starts no
-// processes, sockets, or timers — config load is a synchronous file read.
+// from the loaded config). Task 4 registers the tool_call write guard
+// reading the same state: unattached → inert; local routes → confined;
+// non-local routes → advisory-only. Per pi's lifecycle rules the factory
+// starts no processes, sockets, or timers — config load is a synchronous
+// file read.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
 // ExtensionAPI satisfies this shape at load time.
 
 import { consumerFromConfig, loadConfig, type TwillPiConfig } from "./src/config.js";
+import { guardToolCall, type ToolCallEventShape } from "./src/guard.js";
 import { RegistryClient } from "./src/registry-client.js";
 import { attachTool } from "./src/tools/attach.js";
 import { claimTool } from "./src/tools/claim.js";
@@ -25,6 +28,8 @@ import { WorkspaceState } from "./src/workspace-state.js";
 /** The structural minimum of pi's ExtensionAPI this extension uses. */
 export interface ExtensionHost {
   registerTool(tool: unknown): void;
+  /** pi.on(event, handler) — returns the unsubscribe function. */
+  on(event: "tool_call", handler: (event: ToolCallEventShape) => unknown): () => void;
 }
 
 /**
@@ -51,4 +56,8 @@ export default function twillPi(pi: ExtensionHost): void {
       pollIntervalMs: config.pollIntervalMs,
     }),
   );
+
+  // Task 4: the path-scoped write guard. Inert until a workspace is
+  // attached; the handler is a pure read of the session state.
+  pi.on("tool_call", (event) => guardToolCall(event, state));
 }
