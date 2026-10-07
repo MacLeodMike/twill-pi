@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "exports": {
+    ".": "./index.ts",
     "./config": "./src/config.ts",
     "./registry-client": "./src/registry-client.ts",
     "./resolve-types": "./src/resolve-types.ts",
