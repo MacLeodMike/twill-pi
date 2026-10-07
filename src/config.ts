@@ -1,0 +1,131 @@
+// twill-pi configuration (Task 1) — ~/.pi/agent/twill-pi.json with the
+// TWILL_REGISTRY env override (env wins), merged over pinned defaults.
+//
+// The file is optional: missing → defaults, no error. Malformed JSON (or a
+// non-object document) throws with the file path — the extension factory
+// loads config at load time, so a broken config fails loud there instead
+// of surfacing mid-tool-call.
+//
+// consumerFromConfig derives the core §7.1 consumer tuple: agentKind "pi",
+// principal "pi/<version>@<location>" with the version read from this
+// package's own package.json (self-declared, untrusted per core §5).
+
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Consumer } from "./registry-client.js";
+
+export interface TwillPiConfig {
+  /** Registry base URL (the /twill/v1alpha1 root). */
+  registry: string;
+  /** The core §7.1 consumer agentLocation (matched against route.match). */
+  agentLocation: string;
+  /** Default twill_claim timeout (Task 3's claim-and-poll loop). */
+  claimTimeoutMs: number;
+  /** Poll interval for the claim-and-poll loop (Task 3). */
+  pollIntervalMs: number;
+}
+
+/** The pinned defaults (plan's Global Constraints). */
+export const DEFAULT_CONFIG: TwillPiConfig = {
+  registry: "http://localhost:8080/twill/v1alpha1",
+  agentLocation: "workstation",
+  claimTimeoutMs: 600_000,
+  pollIntervalMs: 7_000,
+};
+
+/** Where pi keeps per-extension config; loadConfig's default path. */
+export const DEFAULT_CONFIG_PATH = join(homedir(), ".pi", "agent", "twill-pi.json");
+
+/** The env var that overrides the registry base URL (wins over the file). */
+export const REGISTRY_ENV_VAR = "TWILL_REGISTRY";
+
+export interface LoadConfigOptions {
+  /** Config file path; defaults to ~/.pi/agent/twill-pi.json. */
+  configPath?: string;
+  /** Environment source; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** One string-or-number config field from the file, with the default kept otherwise. */
+function field<T extends string | number>(
+  file: Record<string, unknown>,
+  key: string,
+  fallback: T,
+): T {
+  const value = file[key];
+  return typeof value === typeof fallback ? (value as T) : fallback;
+}
+
+/** Load config: defaults ← file values ← TWILL_REGISTRY. Missing file is not an error. */
+export function loadConfig(options: LoadConfigOptions = {}): TwillPiConfig {
+  const configPath = options.configPath ?? DEFAULT_CONFIG_PATH;
+  const env = options.env ?? process.env;
+
+  let text: string;
+  try {
+    text = readFileSync(configPath, "utf8");
+  } catch (err) {
+    // A missing file means "no overrides" — every other read failure is
+    // loud and names the path.
+    if (isRecord(err) && err["code"] === "ENOENT") return withEnvOverride(DEFAULT_CONFIG, env);
+    throw new Error(`${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${configPath}: malformed JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(
+      `${configPath}: expected a JSON object, got ${Array.isArray(parsed) ? "an array" : typeof parsed}`,
+    );
+  }
+
+  const config: TwillPiConfig = {
+    registry: field(parsed, "registry", DEFAULT_CONFIG.registry),
+    agentLocation: field(parsed, "agentLocation", DEFAULT_CONFIG.agentLocation),
+    claimTimeoutMs: field(parsed, "claimTimeoutMs", DEFAULT_CONFIG.claimTimeoutMs),
+    pollIntervalMs: field(parsed, "pollIntervalMs", DEFAULT_CONFIG.pollIntervalMs),
+  };
+  return withEnvOverride(config, env);
+}
+
+/** The TWILL_REGISTRY override step (applied last — env wins). */
+function withEnvOverride(config: TwillPiConfig, env: NodeJS.ProcessEnv): TwillPiConfig {
+  const override = env[REGISTRY_ENV_VAR];
+  if (typeof override === "string" && override !== "") {
+    return { ...config, registry: override };
+  }
+  return { ...config };
+}
+
+/** This package's own version (for the principal string). */
+function packageVersion(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as { version?: unknown };
+  if (typeof pkg.version !== "string" || pkg.version === "") {
+    throw new Error("twill-pi: package.json carries no version string");
+  }
+  return pkg.version;
+}
+
+/**
+ * The core §7.1 consumer tuple this adapter declares: agentKind "pi",
+ * agentLocation from config, principal "pi/<version>@<location>"
+ * (self-declared, untrusted per core §5).
+ */
+export function consumerFromConfig(config: TwillPiConfig): Consumer {
+  return {
+    agentLocation: config.agentLocation,
+    agentKind: "pi",
+    principal: `pi/${packageVersion()}@${config.agentLocation}`,
+  };
+}
