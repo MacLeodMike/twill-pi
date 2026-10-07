@@ -1,19 +1,30 @@
 # twill-pi
 
-The pi adapter for the twill workspace fabric — a pi extension that resolves workspaces through a twill registry, attaches them as the session's active workspace, confines writes to the workspace root with a path-scoped guard, and claims cold workspaces through the claim-and-poll loop. It is a pure HTTP consumer of the registry's v1alpha1 API (the same contract the `twill` CLI exercises); it imports nothing from the twill repo.
+The twill fabric's pi **substrate** package — a pi extension that is also an importable library. It carries the shared machinery every pi kind adapter builds on (config, the registry HTTP client, the core §7.1 consumer tuple, the core §7/§8 resolve wire types, the generic per-kind session-state container) and registers exactly one user-facing surface: the `/twill` status command. It registers **no model-facing tools** and **no tool_call guard** — those belong to the kind packages.
 
-Design contracts (in the twill repo): the fabric core spec (`docs/superpowers/specs/2026-10-04-twill-fabric-core.md` in the twill repo) (resolve protocol, consumer tuple, claims) and the workspace spec (`docs/superpowers/specs/2026-10-04-twill-workspace.md`, same repo) (cold/ready lifecycle, RWO advisory, claim flow).
+**You want [twill-pi-workspace](../twill-pi-workspace) for actual workspaces** (the `twill_workspace_resolve` / `twill_workspace_attach` / `twill_workspace_claim` tools and the path-scoped write guard). twill-pi alone is the base layer those tools consume. Install both packages; pi loads each in its own module root.
+
+It is a pure HTTP consumer of the registry's v1alpha1 API (the same contract the `twill` CLI exercises); it imports nothing from the twill repo. Design contracts (in the twill repo): the fabric core spec (`docs/superpowers/specs/2026-10-04-twill-fabric-core.md`) and the workspace spec (`docs/superpowers/specs/2026-10-04-twill-workspace.md`).
 
 ## Install
 
-pi loads extensions from `~/.pi/agent/extensions/`:
+```sh
+pi install <this repo or package>        # substrate
+pi install <twill-pi-workspace repo>     # workspace kind adapter
+```
+
+For local development, pi loads extensions from `~/.pi/agent/extensions/`:
 
 ```sh
 git clone <this repo> ~/.pi/agent/extensions/twill-pi
 cd ~/.pi/agent/extensions/twill-pi && npm install
 ```
 
-No build step — pi loads `index.ts` at runtime via jiti. Alternatively, point pi at the directory with `pi --extension ~/.pi/agent/extensions/twill-pi`. Restart pi after installing.
+No build step — pi loads `index.ts` at runtime via jiti. Restart pi after installing. The package manifest declares `pi.extensions: ["./index.ts"]` and the `pi-package` keyword; `typebox` is host-provided per pi's package conventions and lives in `peerDependencies` (this package's own code imports nothing from it).
+
+## The `/twill` command
+
+`/twill` reports the fabric's status: the configured registry endpoint plus a **live** `GET <registry>/health` answer — documentSet (`current`/`stale`) and the warnings count. A healthy answer (`current`, zero warnings) notifies as info; a stale set or any warnings notify as a warning (with the reason); an unreachable registry notifies as an error. Nothing is cached between invocations.
 
 ## Config
 
@@ -29,72 +40,39 @@ No build step — pi loads `index.ts` at runtime via jiti. Alternatively, point 
 ```
 
 - `registry` — the registry's v1alpha1 root. The `TWILL_REGISTRY` environment variable overrides it (env wins).
-- `agentLocation` — the consumer location matched against route `match` blocks.
-- `claimTimeoutMs` / `pollIntervalMs` — the claim loop's default timeout and poll cadence.
+- `agentLocation` — the consumer location matched against route `match` blocks (used in the consumer tuple below).
+- `claimTimeoutMs` / `pollIntervalMs` — the claim loop's defaults, consumed by kind packages (twill-pi-workspace's claim tool).
 
-Malformed JSON fails loud at extension load, not mid-tool-call.
+Malformed JSON fails loud at extension load, not mid-command.
 
-## The tools
+## Substrate exports
 
-### `twill_resolve` — look before you attach
+Kind packages import the substrate through this package's `exports` map (`dependencies: {"twill-pi": "…"}`):
 
-```json
-{ "kind": "Workspace", "name": "payments-repo" }
+| Subpath | Exports |
+|---|---|
+| `twill-pi/config` | `loadConfig`, `consumerFromConfig`, `TwillPiConfig`, `DEFAULT_CONFIG`, `DEFAULT_CONFIG_PATH`, `REGISTRY_ENV_VAR` |
+| `twill-pi/registry-client` | `RegistryClient`, `RegistryError`, `Consumer`, `RegistryHealth` |
+| `twill-pi/resolve-types` | `parseResolveResult` + the core §7/§8 wire types (`ResolveResult`, `ResolveDescriptor`, `StatusSurface`, `ClaimedRef`) |
+| `twill-pi/session-state` | `KindSessionState<T>` |
+
+`consumerFromConfig` derives the core §7.1 consumer tuple (agentKind `"pi"`, principal `pi/<version>@<location>`, self-declared and untrusted per core §5).
+
+### KindSessionState
+
+```ts
+class KindSessionState<T> {
+  attach(v: T): void;      // set; replaces any previous attachment
+  detach(): void;          // clear; idempotent
+  current(): T | null;     // the current attachment, or null
+}
 ```
 
-Returns the registry's `ResolveResult` verbatim as JSON. Three shapes:
+The substrate provides the **class, never an instance**. Pi loads installed packages with separate module roots, so a shared module singleton is impossible by construction — each kind package instantiates its own container **in its factory closure** (e.g. `new KindSessionState<AttachedWorkspace>()`) and hands it to the tools/handlers it registers.
 
-- **`Attached`** — a route was selected. Read `descriptor.route` (e.g. `{"type": "local", "path": "~/repos/payments-repo"}`) and `descriptor.status`. **`status.ready: true`** means `twill_attach` can attach it now. **`ready: false` means the workspace is COLD — it is not attachable.** The tool prepends a `NOTE:` directing you to `twill_claim`.
-- **`NoMatch`** — no object by that name, or no route matches this consumer.
-- **`Unreachable`** — matching routes exist but none is selectable right now; per-route errors are listed.
+## Lifecycle
 
-### `twill_attach` — make a workspace the session's active workspace
-
-```json
-{ "kind": "Workspace", "name": "payments-repo" }
-```
-
-Resolves fresh every call. On a ready workspace it binds the route as the session state and answers with the expanded root, e.g. `root: /home/you/repos/payments-repo`. From then on use root-relative paths; **pi's cwd does not change**. Cold workspaces are refused (call `twill_claim` first). Attaching a second workspace replaces the first — the result notes the swap. If other consumers hold claims on the workspace, the attach still succeeds but carries a `WARNING:` naming them (the workspace spec's RWO advisory — coordinate before editing).
-
-### `twill_claim` — wake a cold workspace
-
-```json
-{ "name": "payments-repo", "branch": "feat-x", "worktreeName": "feat-x" }
-```
-
-The cold-workspace flow (workspace spec §6), all inside the tool: resolve the parent, POST a Claim bound to the resolved route, then **poll** the materialized workspace until `status.ready: true` — then attach it automatically and answer like `twill_attach`. With `worktreeName` the materialized child is `<name>-<worktreeName>`; without it the parent itself is materialized.
-
-On timeout or abort **the claim is left in place** (visible to operators; the provider may still finish) — the result names the claim and the release command, e.g.:
-
-```
-To release it explicitly: twill claim release Workspace payments-repo claim-payments-repo-pi-…-1759723200
-```
-
-Refuses when the workspace is already ready (use `twill_attach`) or not provisionable.
-
-## The write guard
-
-Once a workspace is attached, a `tool_call` handler confines writes to the workspace root.
-
-**What it blocks** (only when the attached route is `local`):
-
-- `write` / `edit` whose `path` escapes the root — including the classic sibling-repo mistake (`~/repos/other-repo/…` while attached to `~/repos/payments-repo`) and `../` escapes.
-- `bash` commands whose command line contains absolute (`/…`) or home-rooted (`~/…`) path tokens that escape the root — e.g. `make install > /tmp/log` or `rm /etc/…`.
-
-Block reasons name the tool, the root, and the offending resolved path. In-root paths pass; `~` is expanded and `.`/`..` folded before containment is judged.
-
-**What it cannot see — this is NOT a sandbox.** The guard is a conservative-allow pre-flight check, not a security boundary. Known gaps, by design:
-
-- **Non-local routes** (`ssh`, `k8s-exec`) are advisory-only: a local-process guard cannot see a remote filesystem, so everything is allowed (the attach summary still tells the model the root).
-- **Bash parsing is naive**: tokens are whitespace-split with edge quotes stripped. Glued redirects (`>/tmp/x`), quoted paths containing spaces (only the first fragment is checked), command substitutions and subshells (`$(…)`), and relative paths after `cd` are missed.
-- **Symlink escapes** are out of scope for v1.
-- Only `write` / `edit` / `bash` are guarded; read-only and custom tools pass.
-
-Inert when no workspace is attached — an unattached session is never blocked.
-
-## Session lifecycle
-
-Attaching is session state, nothing more: no daemon, no subprocess, no working-directory change. When the session shuts down (quit, or replacement via new/resume/fork), the extension detaches — the next session starts **unattached** and must `twill_attach` (or `twill_claim`) again. A fresh session never silently inherits a workspace.
+The substrate holds no session state: on pi `/reload` (or any session shutdown) the factory simply re-runs. Kind packages that keep attach state start unattached after a reload — re-derivation from transcript entries is a later enhancement (see twill-pi-workspace's README for its lifecycle section).
 
 ## Develop
 

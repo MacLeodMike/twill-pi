@@ -1,4 +1,4 @@
-// twill-pi configuration (Task 1) — ~/.pi/agent/twill-pi.json with the
+// twill-pi configuration (T2b) — ~/.pi/agent/twill-pi.json with the
 // TWILL_REGISTRY env override (env wins), merged over pinned defaults.
 //
 // The file is optional: missing → defaults, no error. Malformed JSON (or a
@@ -21,9 +21,9 @@ export interface TwillPiConfig {
   registry: string;
   /** The core §7.1 consumer agentLocation (matched against route.match). */
   agentLocation: string;
-  /** Default twill_claim timeout (Task 3's claim-and-poll loop). */
+  /** Default claim timeout (the kind packages' claim-and-poll loop). */
   claimTimeoutMs: number;
-  /** Poll interval for the claim-and-poll loop (Task 3). */
+  /** Poll interval for the claim-and-poll loop. */
   pollIntervalMs: number;
 }
 

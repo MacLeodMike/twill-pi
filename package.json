@@ -1,16 +1,36 @@
 {
   "name": "twill-pi",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
+  "description": "Substrate for twill fabric pi adapters — config, registry client, consumer identity, per-kind session state; registers the /twill status command. The workspace tools live in twill-pi-workspace.",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
+  "exports": {
+    "./config": "./src/config.ts",
+    "./registry-client": "./src/registry-client.ts",
+    "./resolve-types": "./src/resolve-types.ts",
+    "./session-state": "./src/session-state.ts"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "scripts": {
     "test": "vitest run"
   },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
+  "peerDependencies": {
+    "typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

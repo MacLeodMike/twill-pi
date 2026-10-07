@@ -1,4 +1,4 @@
-// Registry HTTP client (Task 1) — thin fetch wrappers over the twill
+// Registry HTTP client (T2b) — thin fetch wrappers over the twill
 // registry's v1alpha1 surface (workspace §8 + core §9). The adapter is a
 // pure HTTP consumer: it imports nothing from the twill repo and shares
 // the exact contract the `twill` CLI exercises.
@@ -46,6 +46,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The registry's health report (workspace §8's GET /health surface):
+ * documentSet current/stale plus the warnings array; rejectedAt/reason are
+ * present only on a stale set.
+ */
+export interface RegistryHealth {
+  documentSet: string;
+  warnings: unknown[];
+  rejectedAt?: string;
+  reason?: string;
+}
+
 /** Read a response body as JSON; undefined when the body isn't JSON. */
 async function readJson(res: Response): Promise<unknown> {
   const text = await res.text();
@@ -78,7 +90,7 @@ export class RegistryClient {
    * core §7: POST /resolve with {kind, name, consumer}. The three result
    * shapes (Attached with descriptor / NoMatch / Unreachable with errors)
    * are returned verbatim as parsed JSON — the adapter does not interpret
-   * them here (the tools in later tasks do).
+   * them here (the kind packages' tools do).
    */
   async resolve(kind: string, name: string, consumer: Consumer): Promise<unknown> {
     const res = await fetch(`${this.base}/resolve`, {
@@ -87,6 +99,23 @@ export class RegistryClient {
       body: JSON.stringify({ kind, name, consumer }),
     });
     return parseOrThrow(res);
+  }
+
+  /**
+   * GET /health — the registry's HealthReport, validated minimally
+   * (documentSet string + warnings array); a malformed body throws (the
+   * registry violated the contract).
+   */
+  async health(): Promise<RegistryHealth> {
+    const res = await fetch(`${this.base}/health`);
+    const body = await parseOrThrow(res);
+    if (!isRecord(body) || typeof body["documentSet"] !== "string" || !Array.isArray(body["warnings"])) {
+      throw new Error(`malformed health report: ${JSON.stringify(body)}`);
+    }
+    const health: RegistryHealth = { documentSet: body["documentSet"], warnings: body["warnings"] };
+    if (typeof body["rejectedAt"] === "string") health.rejectedAt = body["rejectedAt"];
+    if (typeof body["reason"] === "string") health.reason = body["reason"];
+    return health;
   }
 
   /** GET /<kind>/<name> — the verbatim stored document envelope. */

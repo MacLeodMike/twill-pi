@@ -1,83 +1,84 @@
-// twill-pi — the pi extension that is the twill fabric's first
-// consumer-adapter (T2b). pi loads this module at runtime via jiti (no
-// build step); the default export is the extension factory pi calls with
-// its ExtensionAPI.
+// twill-pi — the twill fabric's pi SUBSTRATE package (T2c). This extension
+// carries the shared machinery the kind packages build on (config, the
+// registry client, the consumer tuple, resolve wire types, the generic
+// per-kind session-state container) and registers a single status command,
+// /twill — no model-facing tools, no tool_call guard. The workspace kind
+// tools (twill_workspace_*) and the write guard live in the kind package
+// twill-pi-workspace, which depends on this package's exports.
 //
-// Task 3 scope: the factory loads config, builds the RegistryClient +
-// consumer tuple + session WorkspaceState in its closure, and registers the
-// twill_resolve / twill_attach / twill_claim tools (twill_claim closes over
-// the same client/consumer/state and reads claimTimeoutMs/pollIntervalMs
-// from the loaded config). Task 4 registers the tool_call write guard
-// reading the same state: unattached → inert; local routes → confined;
-// non-local routes → advisory-only. Task 5 wires the lifecycle: a
-// session_shutdown handler clears the WorkspaceState (idempotent — pi's
-// shutdown fires on quit AND on session replacement via new/resume/fork,
-// so detach must not assume a prior attach). session_start deliberately
-// re-attaches NOTHING: the state is initialized empty by the factory, so
-// every session (startup, reload, new, resume, fork) starts unattached.
-// Per pi's lifecycle rules the factory starts no processes, sockets, or
-// timers — config load is a synchronous file read.
+// pi loads this module at runtime via jiti (no build step); the default
+// export is the extension factory pi calls with its ExtensionAPI. Per pi's
+// lifecycle rules the factory starts no processes, sockets, or timers —
+// config load is a synchronous file read; the /twill handler's registry
+// fetch happens per command invocation, not at load.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
 // ExtensionAPI satisfies this shape at load time.
 
-import { consumerFromConfig, loadConfig, type TwillPiConfig } from "./src/config.js";
-import { guardToolCall, type ToolCallEventShape } from "./src/guard.js";
-import { RegistryClient } from "./src/registry-client.js";
-import { attachTool } from "./src/tools/attach.js";
-import { claimTool } from "./src/tools/claim.js";
-import { resolveTool } from "./src/tools/resolve.js";
-import { WorkspaceState } from "./src/workspace-state.js";
+import { loadConfig, type TwillPiConfig } from "./src/config.js";
+import { RegistryClient, type RegistryHealth } from "./src/registry-client.js";
+
+/** The structural minimum of pi's ExtensionContext the /twill handler uses. */
+export interface CommandContextShape {
+  ui: {
+    notify(message: string, type?: "info" | "warning" | "error"): void;
+  };
+}
+
+/** The structural minimum of pi's command registration options. */
+export interface CommandRegistration {
+  description?: string;
+  handler(args: string, ctx: CommandContextShape): Promise<void>;
+}
 
 /** The structural minimum of pi's ExtensionAPI this extension uses. */
 export interface ExtensionHost {
   registerTool(tool: unknown): void;
+  registerCommand(name: string, options: CommandRegistration): void;
   /** pi.on(event, handler) — returns the unsubscribe function. */
-  on(event: "tool_call", handler: (event: ToolCallEventShape) => unknown): () => void;
-  on(event: "session_shutdown", handler: (event: SessionShutdownEventShape) => unknown): () => void;
-}
-
-/** pi's session_shutdown event, typed structurally (pi 1.0.4 SessionShutdownEvent). */
-export interface SessionShutdownEventShape {
-  type: "session_shutdown";
-  reason: "quit" | "reload" | "new" | "resume" | "fork";
-  targetSessionFile?: string;
+  on(event: string, handler: (event: never) => unknown): () => void;
 }
 
 /**
  * Module-local extension state: the loaded config, exposed for tests
- * asserting what the factory loaded (tool bodies close over the factory
- * locals — client/consumer/state — not this bag). `config` is undefined
- * until pi calls the factory.
+ * asserting what the factory loaded. `config` is undefined until pi calls
+ * the factory. (Not shared session state — kind packages hold their own.)
  */
 export const extensionState: { config?: TwillPiConfig } = {};
+
+/** The /twill command body: report health + endpoint through ctx.ui.notify. */
+function reportHealth(ctx: CommandContextShape, registry: string, health: RegistryHealth): void {
+  const parts = [
+    `twill registry: ${registry}`,
+    `documentSet=${health.documentSet}`,
+    `warnings=${health.warnings.length}`,
+  ];
+  if (health.reason !== undefined) parts.push(`reason: ${health.reason}`);
+  // A current set with no warnings is the healthy shape; anything else
+  // (stale set, warnings) surfaces as a warning rather than an info.
+  const type = health.documentSet === "current" && health.warnings.length === 0 ? "info" : "warning";
+  ctx.ui.notify(parts.join(" — "), type);
+}
 
 export default function twillPi(pi: ExtensionHost): void {
   const config = loadConfig();
   extensionState.config = config;
 
   const client = new RegistryClient(config.registry);
-  const consumer = consumerFromConfig(config);
-  const state = new WorkspaceState();
 
-  pi.registerTool(resolveTool(client, consumer));
-  pi.registerTool(attachTool(client, consumer, state));
-  pi.registerTool(
-    claimTool(client, consumer, state, {
-      claimTimeoutMs: config.claimTimeoutMs,
-      pollIntervalMs: config.pollIntervalMs,
-    }),
-  );
-
-  // Task 4: the path-scoped write guard. Inert until a workspace is
-  // attached; the handler is a pure read of the session state.
-  pi.on("tool_call", (event) => guardToolCall(event, state));
-
-  // Task 5: session_shutdown clears the attachment — the guard goes inert
-  // with the session's workspace gone. detach() is idempotent, and no
-  // session_start handler re-attaches: a fresh session starts unattached.
-  pi.on("session_shutdown", () => {
-    state.detach();
+  pi.registerCommand("twill", {
+    description: "Show twill fabric status (registry endpoint + live health)",
+    handler: async (_args, ctx) => {
+      let health: RegistryHealth;
+      try {
+        health = await client.health();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.ui.notify(`twill registry: ${config.registry} — unreachable (${message})`, "error");
+        return;
+      }
+      reportHealth(ctx, config.registry, health);
+    },
   });
 }

@@ -1,4 +1,4 @@
-// RegistryClient tests (Task 1) — a thin fetch consumer of the twill
+// RegistryClient tests (T2b) — a thin fetch consumer of the twill
 // registry's HTTP surface, verified against a real node:http server on an
 // ephemeral port (the twill repo's server.test.ts harness pattern: real
 // HTTP, canned handlers, no fetch mocks).
@@ -242,6 +242,49 @@ describe("releaseClaim (the T2a pattern: parent-scoped lookup + PATCH)", () => {
     const { base } = await boot(() => ({ body: [] }));
     const client = new RegistryClient(base);
     await expect(client.releaseClaim("Workspace", "payments-repo", "claim-missing")).rejects.toThrow("claim-missing");
+  });
+});
+
+describe("health", () => {
+  it("GETs /health and returns the parsed report", async () => {
+    const report = {
+      documentSet: "current",
+      warnings: [{ type: "overlay-corrupt-line", line: 2 }],
+    };
+    const { base, requests } = await boot(() => ({ body: report }));
+    const client = new RegistryClient(base);
+    const health = await client.health();
+
+    const req = requests[0]!;
+    expect(req.method).toBe("GET");
+    expect(req.url).toBe("/twill/v1alpha1/health");
+    expect(health.documentSet).toBe("current");
+    expect(health.warnings).toEqual(report.warnings);
+  });
+
+  it("carries rejectedAt/reason when the set is stale", async () => {
+    const report = {
+      documentSet: "stale",
+      rejectedAt: "2026-10-07T01:00:00Z",
+      reason: "fingerprint collision",
+      warnings: [],
+    };
+    const { base } = await boot(() => ({ body: report }));
+    const client = new RegistryClient(base);
+    const health = await client.health();
+    expect(health).toEqual(report);
+  });
+
+  it("throws on a malformed report (missing documentSet/warnings)", async () => {
+    const { base } = await boot(() => ({ body: { ok: true } }));
+    const client = new RegistryClient(base);
+    await expect(client.health()).rejects.toThrow("malformed health report");
+  });
+
+  it("throws RegistryError on a non-2xx answer", async () => {
+    const { base } = await boot(() => ({ status: 500, body: { error: "boom" } }));
+    const client = new RegistryClient(base);
+    await expect(client.health()).rejects.toThrow("registry answered HTTP 500: boom");
   });
 });
 

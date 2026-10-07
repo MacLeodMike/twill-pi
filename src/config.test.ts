@@ -1,4 +1,4 @@
-// Config tests (Task 1) — defaults, file merge, TWILL_REGISTRY env
+// Config tests (T2b) — defaults, file merge, TWILL_REGISTRY env
 // override, malformed-file failure, and the consumer tuple.
 //
 // The config path and env are injected (loadConfig takes both) so tests
