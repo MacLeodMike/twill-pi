@@ -2,7 +2,7 @@
 
 The pi adapter for the twill workspace fabric — a pi extension that resolves workspaces through a twill registry, attaches them as the session's active workspace, confines writes to the workspace root with a path-scoped guard, and claims cold workspaces through the claim-and-poll loop. It is a pure HTTP consumer of the registry's v1alpha1 API (the same contract the `twill` CLI exercises); it imports nothing from the twill repo.
 
-Design contracts (in the twill repo): [the fabric core spec](https://github.com/example/twill/blob/main/docs/superpowers/specs/2026-10-04-twill-fabric-core.md) (resolve protocol, consumer tuple, claims) and [the workspace spec](https://github.com/example/twill/blob/main/docs/superpowers/specs/2026-10-04-twill-workspace.md) (cold/ready lifecycle, RWO advisory, claim flow).
+Design contracts (in the twill repo): the fabric core spec (`docs/superpowers/specs/2026-10-04-twill-fabric-core.md` in the twill repo) (resolve protocol, consumer tuple, claims) and the workspace spec (`docs/superpowers/specs/2026-10-04-twill-workspace.md`, same repo) (cold/ready lifecycle, RWO advisory, claim flow).
 
 ## Install
 
