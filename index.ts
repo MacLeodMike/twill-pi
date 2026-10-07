@@ -9,9 +9,14 @@
 // the same client/consumer/state and reads claimTimeoutMs/pollIntervalMs
 // from the loaded config). Task 4 registers the tool_call write guard
 // reading the same state: unattached → inert; local routes → confined;
-// non-local routes → advisory-only. Per pi's lifecycle rules the factory
-// starts no processes, sockets, or timers — config load is a synchronous
-// file read.
+// non-local routes → advisory-only. Task 5 wires the lifecycle: a
+// session_shutdown handler clears the WorkspaceState (idempotent — pi's
+// shutdown fires on quit AND on session replacement via new/resume/fork,
+// so detach must not assume a prior attach). session_start deliberately
+// re-attaches NOTHING: the state is initialized empty by the factory, so
+// every session (startup, reload, new, resume, fork) starts unattached.
+// Per pi's lifecycle rules the factory starts no processes, sockets, or
+// timers — config load is a synchronous file read.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
@@ -30,6 +35,14 @@ export interface ExtensionHost {
   registerTool(tool: unknown): void;
   /** pi.on(event, handler) — returns the unsubscribe function. */
   on(event: "tool_call", handler: (event: ToolCallEventShape) => unknown): () => void;
+  on(event: "session_shutdown", handler: (event: SessionShutdownEventShape) => unknown): () => void;
+}
+
+/** pi's session_shutdown event, typed structurally (pi 1.0.4 SessionShutdownEvent). */
+export interface SessionShutdownEventShape {
+  type: "session_shutdown";
+  reason: "quit" | "reload" | "new" | "resume" | "fork";
+  targetSessionFile?: string;
 }
 
 /**
@@ -60,4 +73,11 @@ export default function twillPi(pi: ExtensionHost): void {
   // Task 4: the path-scoped write guard. Inert until a workspace is
   // attached; the handler is a pure read of the session state.
   pi.on("tool_call", (event) => guardToolCall(event, state));
+
+  // Task 5: session_shutdown clears the attachment — the guard goes inert
+  // with the session's workspace gone. detach() is idempotent, and no
+  // session_start handler re-attaches: a fresh session starts unattached.
+  pi.on("session_shutdown", () => {
+    state.detach();
+  });
 }
