@@ -8,9 +8,11 @@
 //
 // pi loads this module at runtime via jiti (no build step); the default
 // export is the extension factory pi calls with its ExtensionAPI. Per pi's
-// lifecycle rules the factory starts no processes, sockets, or timers —
-// config load is a synchronous file read; the /twill handler's registry
-// fetch happens per command invocation, not at load.
+// lifecycle rule the factory starts no processes, sockets, or timers — it
+// registers handlers only. When a `provider` block is configured, the embedded
+// provider (a poll loop) starts on `session_start` and stops on
+// `session_shutdown` (both idempotent); config load is a synchronous file read
+// and the /twill handler's registry fetch happens per command invocation.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
@@ -18,6 +20,8 @@
 
 import { loadConfig, type TwillPiConfig } from "./src/config.js";
 import { RegistryClient, type RegistryHealth } from "./src/registry-client.js";
+import { startEmbeddedProvider } from "./src/provider.js";
+import { startProvider, type ProviderHandle } from "twill/provider";
 
 /** The structural minimum of pi's ExtensionContext the /twill handler uses. */
 export interface CommandContextShape {
@@ -47,6 +51,25 @@ export interface ExtensionHost {
  */
 export const extensionState: { config?: TwillPiConfig } = {};
 
+/**
+ * Test seam: substitute a fake provider starter (avoiding a real poll loop).
+ * Also resets the running-handle state, so a test's session_start never leaks
+ * a leftover handle into the next test. pi calls the factory with the real
+ * path (the default); tests call this.
+ */
+let providerStarter: typeof startProvider = startProvider;
+export function setProviderStarterForTests(starter: typeof startProvider): void {
+  providerStarter = starter;
+  providerHandle = null;
+}
+
+/**
+ * The running provider's handle, or null when not started. Module-local and
+ * reset on reload (pi replaces the extension runtime); `session_shutdown` of
+ * the old runtime stops the old provider before the new one starts.
+ */
+let providerHandle: ProviderHandle | null = null;
+
 /** The /twill command body: report health + endpoint through ctx.ui.notify. */
 function reportHealth(ctx: CommandContextShape, registry: string, health: RegistryHealth): void {
   const parts = [
@@ -61,8 +84,8 @@ function reportHealth(ctx: CommandContextShape, registry: string, health: Regist
   ctx.ui.notify(parts.join(" — "), type);
 }
 
-export default function twillPi(pi: ExtensionHost): void {
-  const config = loadConfig();
+export default function twillPi(pi: ExtensionHost, options: { configPath?: string } = {}): void {
+  const config = loadConfig({ configPath: options.configPath });
   extensionState.config = config;
 
   const client = new RegistryClient(config.registry);
@@ -81,4 +104,19 @@ export default function twillPi(pi: ExtensionHost): void {
       reportHealth(ctx, config.registry, health);
     },
   });
+
+  // The embedded provider (a poll loop) is config-gated and session-scoped:
+  // per pi's lifecycle rule the factory registers handlers only — the provider
+  // starts on session_start and stops on session_shutdown, both idempotent so
+  // reload/shutdown convergence never double-starts or double-stops.
+  if (config.provider != null) {
+    pi.on("session_start", () => {
+      if (providerHandle !== null) return; // already running
+      providerHandle = startEmbeddedProvider(config, providerStarter);
+    });
+    pi.on("session_shutdown", () => {
+      providerHandle?.stop();
+      providerHandle = null;
+    });
+  }
 }

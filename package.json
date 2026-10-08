@@ -30,6 +30,9 @@
   "scripts": {
     "test": "vitest run"
   },
+  "dependencies": {
+    "twill": "file:/home/example/repos/twill"
+  },
   "peerDependencies": {
     "typebox": "*"
   },
