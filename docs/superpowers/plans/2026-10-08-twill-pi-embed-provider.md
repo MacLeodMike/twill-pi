@@ -2,96 +2,92 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Close the homelab one-install story — `twill-pi` embeds the twill provider (`startProvider`) in-process so installing the pi extension yields a registry client *and* a provider, no separate daemon. Per `~/repos/twill/docs/superpowers/specs/2026-10-07-twill-localhost-provider.md` §2 + the provider plan's follow-on.
+**Goal:** Close the homelab one-install story — twill-pi embeds the twill provider (`startProvider`) in-process, so installing the pi extension yields a registry client AND a provider with no separate daemon. Per `~/repos/twill/docs/superpowers/specs/2026-10-07-twill-localhost-provider.md` §2 + the provider plan's follow-on.
 
-**Architecture:** twill-pi (the substrate) gains an optional `provider` config block and an embedding seam that adapts its own config to the provider's `ProviderConfig` and runs the loop, stopped on `session_shutdown`. The provider code itself lives in the twill repo (`src/provider/loop.ts`); twill-pi consumes it as a dependency. This is the runtime-agnostic provider hosted by the substrate — the same loop a `twill provider` CLI process runs.
+**Architecture:** twill-pi (the substrate) gains an optional `provider` config block; when present, the factory registers a `session_start` handler that starts the provider loop (via the `twill/provider` import) and a `session_shutdown` handler that stops it. The provider loop itself lives in the twill repo; twill-pi only adapts its config to `ProviderConfig` and manages the session-scoped lifecycle.
 
-**Tech Stack:** TypeScript/Node, vitest, tsx. twill consumed as a `file:` dependency (dev shape).
+**Tech Stack:** TypeScript/Node, vitest, tsx. twill consumed as a `file:` dependency (dev shape, matching the twill-pi-workspace → twill-pi pattern).
 
-**Specs:** `~/repos/twill/docs/superpowers/specs/2026-10-07-twill-localhost-provider.md` §2/§5; twill provider code `src/provider/loop.ts` (`startProvider`, `ProviderConfig`, `ProviderHandle`).
+**Specs (authoritative):** `~/repos/twill/docs/superpowers/specs/2026-10-07-twill-localhost-provider.md`; twill `src/provider/loop.ts` (`startProvider`, `ProviderConfig`, `ProviderHandle`); pi's extension lifecycle rule (no timers in the factory; `session_start`/`session_shutdown`).
 
 ---
 
 ## Global Constraints
 
-- **Config-gated, explicit.** The provider runs iff `twill-pi.json` carries a `provider` block. Absent block → no provider, no timer, bare installs unchanged. (Not "auto-detect a local registry" — explicit config over implicit guessing.)
-- **The registry is shared.** The embedded provider talks to the same registry the substrate's config names (`config.registry`).
-- **Dependency injection for tests.** The embedding seam takes an injectable `start` (defaulting to the real `startProvider`) so the wiring is unit-testable without a real registry/poll loop.
-- **Lifecycle clean.** Factory starts the provider when configured; `session_shutdown` stops it (`handle.stop()`). The T2c "factory starts no processes/sockets/timers" comment is updated: that invariant held when there was no provider; the provider is the deliberate exception, gated on config.
-- **One repo + one tiny twill touch.** All twill-pi work lands in ~/repos/twill-pi. The only twill-repo change is adding an `exports` map exposing `./provider` (done as a separate small twill commit before Task 1).
+- **pi lifecycle rule (load-bearing).** The factory starts NO processes/sockets/timers — it only registers handlers. The provider loop (a timer) starts from a `session_start` handler and stops from an idempotent `session_shutdown` handler. (pi docs: "Start long-lived resources from `session_start`"; "Close session-scoped resources from an idempotent `session_shutdown` handler.")
+- **Config-gated, explicit.** The provider runs iff `twill-pi.json` carries a `provider` block. Absent → no provider, no session_start provider start, no timer. Bare installs unchanged. (Not auto-detected from a local registry URL — explicit over implicit.)
+- **One registry.** The embedded provider talks to the same registry the substrate is configured with (`config.registry`, including the `TWILL_REGISTRY` env override). The provider block carries only `routes`/`parents`/`pollIntervalMs` — NOT its own registry.
+- **Dev-shape dependency.** `twill` is a `file:` dependency pointing at the local twill repo. The import is `from "twill/provider"` (the exports map T2.5 added).
+- **Fail-loud config.** A malformed `provider` block throws at load (config is fail-loud at load per the existing invariant), never a half-started provider.
 
 ## Review Focus
 
-1. **No `provider` block** → factory registers only `/twill`, no provider started, no timer, no stop handler needed. → Task 2.
-2. **A `provider` block with valid routes+parents** → factory starts the provider with a `ProviderConfig` whose `registry` = the substrate's configured registry (not a hardcoded default), `routes`/`parents` from the block, `onEvent` wired. → Task 2.
-3. **session_shutdown** → the provider's `stop()` is called exactly once. → Task 2.
-4. **A malformed `provider` block** (missing parents, a route without a string `type`) → `loadConfig` throws loud at load (config is fail-loud at load per the T2c invariant), never a half-started provider. → Task 1.
-5. **End-to-end**: a real in-process twill registry + the embedded provider + a claim → the child workspace materializes and resolves. → Task 3.
+1. **No `provider` block** → factory registers only `/twill` and the lifecycle handlers are registered but inert (no provider started on session_start). No timer. → Task 2.
+2. **A valid `provider` block** → on session_start, the provider starts with a `ProviderConfig` whose `registry` = the substrate's configured registry (not a hardcoded default) and `routes`/`parents` from the block. → Task 2.
+3. **session_shutdown** → the provider's `stop()` is called exactly once (idempotent — a second session_shutdown / reload converges without double-stop). → Task 2.
+4. **A malformed `provider` block** (missing parents, a route without a string `type`, non-array routes) → `loadConfig` throws loud at load, naming the file + field. → Task 1.
+5. **End-to-end**: a real in-process twill registry + the factory (session_start fired) + a claim → the child workspace materializes and resolves. → Task 3.
 
 ---
 
-### Task 0: twill exposes the provider (twill repo, small additive commit)
-
-**Files:** Modify `~/repos/twill/package.json` (add `exports`).
-- Add: `"exports": { "./provider": "./src/provider/loop.ts" }`. Nothing else changes; twill is `private` and nothing imports it as a package yet, so an exports map restricts nothing in practice. Matches twill-pi's own `.ts`-target exports pattern (proven to load under pi's jiti).
-- Gate: `npx vitest run` still green in twill; commit to main directly (trivial additive).
-
----
-
-### Task 1: `provider` config block (twill-pi)
+### Task 1: the `provider` config block + twill dependency
 
 **Files:**
-- Modify: `~/repos/twill-pi/package.json` (add `"dependencies": {"twill": "file:/home/example/repos/twill"}`)
-- Modify: `~/repos/twill-pi/src/config.ts` (parse + validate the optional `provider` block)
-- Test: `~/repos/twill-pi/src/config.test.ts`
+- Modify: `package.json` (add `"dependencies": {"twill": "file:/home/example/repos/twill"}`)
+- Modify: `src/config.ts` (parse + validate the optional `provider` block)
+- Test: `src/config.test.ts`
 
 **Interfaces:**
-- `TwillPiConfig` gains `provider?: TwillPiProviderConfig` where `interface TwillPiProviderConfig { parents: string[]; routes: Route[]; pollIntervalMs?: number }` (`Route` imported type-only from `twill/provider`).
-- `loadConfig` parses the block when present; validation is fail-loud at load (Review Focus #4): `provider` present but not an object / `parents` missing or not a non-empty string array / `routes` missing or not a non-empty array of route objects (each a record with a string `type`) / `pollIntervalMs` present-but-not-a-positive-number → throw naming the file + field. Absent `provider` → `config.provider === undefined`.
+- `TwillPiConfig` gains `provider?: TwillPiProviderConfig` where `interface TwillPiProviderConfig { parents: string[]; routes: Route[]; pollIntervalMs?: number }`.
+  - `Route` — import the type from `twill/provider` if re-exported; otherwise use a structural `Array<Record<string, unknown> & { type: string }>` and note the choice. (Check what `twill/provider` actually re-exports first.)
+- `loadConfig` parses the block when present; validation is fail-loud at load (Review Focus #4): `provider` present but not a plain object → throw; `parents` missing / not a non-empty array of strings → throw; `routes` missing / not a non-empty array of route objects (each a record with a string `type`) → throw; `pollIntervalMs` present but not a positive number → throw. Absent `provider` → `config.provider === undefined`.
 
 Behavior pins:
-- Route objects pass through verbatim (the provider's exact-match binding needs them byte-identical to the route a claim carries).
-- Existing config fields + TWILL_REGISTRY override behavior unchanged; the 43 current tests stay green.
+- Route objects pass through VERBATIM (the provider's exact-match binding needs them byte-identical to the route a claim carries).
+- The existing scalar fields + the TWILL_REGISTRY override behavior are unchanged; the 43 current tests stay green.
 
 Gate: `npx vitest run` + `npx tsc --noEmit` green.
 
 ---
 
-### Task 2: the embedding seam + factory wiring (twill-pi)
+### Task 2: session_start wiring + lifecycle (index.ts) + README
 
 **Files:**
-- Create: `~/repos/twill-pi/src/provider.ts`
-- Modify: `~/repos/twill-pi/index.ts`
-- Test: `~/repos/twill-pi/src/provider.test.ts`, `~/repos/twill-pi/index.test.ts` (or factory.test.ts — match existing)
+- Modify: `index.ts` (factory registers session_start/session_shutdown handlers)
+- Modify: `README.md` (the provider config block + the embedded-provider story)
+- Test: `index.test.ts` (or the existing factory test file)
 
 **Interfaces:**
-- `startEmbeddedProvider(config: TwillPiConfig, start: typeof startProvider = startProvider): ProviderHandle | null` — `null` when `config.provider` is undefined (Review Focus #1); else builds `ProviderConfig { registry: config.registry, routes, parents, pollIntervalMs, onEvent }` (Review Focus #2 — registry from the substrate config) and calls `start`, returning the handle.
-- Factory: when `startEmbeddedProvider` returns a handle, register `pi.on("session_shutdown", ...)` → `handle.stop()` exactly once (Review Focus #3). `onEvent` → `console.log` (pi captures extension stdout; the substrate has no per-event UI channel and notify-per-poll would be noise).
-- Update the index.ts header comment: the "no processes/sockets/timers" invariant is now "…unless a `provider` block is configured — the embedded provider is the deliberate, config-gated exception."
+- A module-local (or extensionState) `providerHandle: ProviderHandle | null`, starting null.
+- Factory: after registering `/twill`, register `pi.on("session_start", ...)` and `pi.on("session_shutdown", ...)`.
+  - `session_start` handler: if `config.provider` is present AND `providerHandle === null`, build the `ProviderConfig` (`registry: config.registry`, `routes`, `parents`, `pollIntervalMs` when present, `onEvent` wired to pi logging) and call `startProvider`; store the handle. Idempotent (already-running → no-op).
+  - `session_shutdown` handler: if `providerHandle !== null`, `providerHandle.stop()`; set `providerHandle = null`. Idempotent (already-stopped → no-op).
+- `onEvent` routing: the provider emits one line per lifecycle event; route it to `console.log` (pi captures extension stdout) or the substrate's logging — pick the cleaner one and note the choice.
+- Update the index.ts header comment: the "no processes/sockets/timers in the factory" invariant now reads "the factory registers handlers only; the provider (a timer) starts on `session_start`, stops on `session_shutdown`, per pi's lifecycle rule."
 
 Behavior pins:
-- All wiring tests inject a fake `start` (DI seam) — no real poll loop in unit tests.
-- `config.provider === undefined` → `startEmbeddedProvider` returns null, factory starts nothing.
+- **Testability without a real poll loop**: inject the `startProvider` dependency so the wiring is unit-testable — e.g. the factory reads an optional injected starter (a module-scope `setProviderStarterForTests` seam, or a factory second-argument with the real `startProvider` as the default — pick the cleaner one, noting pi calls the factory with exactly one argument so the default must be the real path). Tests: (RF1) no provider block → session_start starts nothing; (RF2) provider block → session_start calls the injected starter with the adapted ProviderConfig (registry from config.registry); (RF3) session_shutdown stops exactly once; a second shutdown is a no-op.
+- session_start when the provider is already running (e.g. a second session_start after a switch) does NOT start a second loop.
 
 Gate: `npx vitest run` + `npx tsc --noEmit` green.
 
 ---
 
-### Task 3: integration test + README (twill-pi)
+### Task 3: end-to-end integration (embedded provider fulfills a claim)
 
 **Files:**
-- Create: `~/repos/twill-pi/src/provider.integration.test.ts` (or extend an integration suite)
-- Modify: `~/repos/twill-pi/README.md`
+- Test: `src/provider.integration.test.ts` (new)
 
 **Interfaces:**
-- Integration (Review Focus #5): boot a REAL in-process twill registry (the twill package's `start` + `createServer` — importable from the file: dep for the test), a tmp git fixture, a twill-pi config with a `provider` block, the real `startEmbeddedProvider`. POST a claim (over HTTP) → the embedded provider fulfills → the child Workspace appears + `ready:true` → `resolve(Workspace, <child>)` returns the child route. This proves the homelab one-install loop closes with the provider embedded in the substrate.
-- README: the `provider` config block (shape + a complete example), the embedded-provider story (one install = registry client + provider), the lifecycle (starts on load, stops on shutdown), and the explicit-config rule (no block → no provider).
+- Boot a REAL in-process twill registry (import `start` + `createServer` from the twill package — check what `twill`'s exports map exposes; if only `./provider` is exposed, add a `./registry` export to the twill repo OR import the deep path `twill/src/registry/server.js` — pick whichever the twill package supports, noting the choice) + a tmp git fixture (the twill repo's own e2e.test.ts at `~/repos/twill/src/provider/e2e.test.ts` has the fixture pattern).
+- The full loop with the provider embedded via the factory's session_start: claim a cold workspace over HTTP (POST a Claim) → the embedded provider fulfills → the child Workspace appears + `ready:true` → `resolve(Workspace, <child>)` returns the child route. Review Focus #5.
+- Use short poll intervals (config `provider.pollIntervalMs` small) + generous timeouts (tsx/git are slow).
 
-Gate: `npx vitest run` + `npx tsc --noEmit` green; README config/signature match the code.
+Gate: `npx vitest run` green incl. the E2E; `npx tsc --noEmit` clean.
 
 ---
 
 ## Follow-on (noted, not built here)
 
-- Installing twill-pi + twill-pi-workspace into `~/.pi/agent` and dogfooding the live claim→materialize→attach loop.
-- The steady-state log-repetition and SIGTERM minors on the twill provider (ledger).
+- Installing twill-pi + twill-pi-workspace into `~/.pi/agent` and dogfooding the live claim→materialize→attach loop in a real pi session.
+- Publish shape (a real semver `twill` package or a shared `@twill/provider` package) replacing the `file:` dev dep.
