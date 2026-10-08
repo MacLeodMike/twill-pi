@@ -32,7 +32,7 @@
 // this test needs the registry's store + server too — real, in-process,
 // the same modules a deployed registry runs.
 
-import { afterAll, beforeAll, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,7 +59,6 @@ let provider: ProviderHandle | null = null;
 
 /** The provider's lifecycle lines (onEvent → console.log, captured + silenced). */
 let logLines: string[] = [];
-let logSpy: MockInstance<(...args: unknown[]) => void>;
 
 /** Run git; reject (with stderr) on nonzero exit. */
 function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): Promise<string> {
@@ -118,18 +117,14 @@ beforeAll(async () => {
   const port = typeof address === "object" && address !== null ? address.port : 0;
   registry = `http://127.0.0.1:${port}/twill/v1alpha1`;
 
-  // The provider's lifecycle observer logs through console.log (the seam's
-  // wiring). Capture the lines for assertions and silence them — at a 50 ms
-  // poll the already-fulfilled "skipped" line would spam vitest's output.
+  // The provider's lifecycle events are captured via an injected onEvent
+  // (the seam's default is a file logger — never stdout, which corrupts the
+  // TUI). At a 50 ms poll this captures the fulfilled line without spamming.
   logLines = [];
-  logSpy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    logLines.push(args.map(String).join(" "));
-  });
 }, 30_000);
 
 afterAll(async () => {
   provider?.stop();
-  logSpy.mockRestore();
   server.closeIdleConnections();
   await new Promise<void>((done) => server.close(() => done()));
   store.close();
@@ -198,9 +193,11 @@ describe("startEmbeddedProvider — in-process end-to-end claim fulfillment (Rev
       const client = new RegistryClient(config.registry);
       const consumer = consumerFromConfig(config);
 
-      // The embedded provider: the REAL startProvider (the seam's default —
-      // no injected fake), polling the substrate's configured registry.
-      provider = startEmbeddedProvider(config);
+      // The embedded provider: the REAL startProvider (the seam's default
+      // start) with an injected onEvent capturing the lifecycle lines.
+      provider = startEmbeddedProvider(config, undefined, (line) => {
+        logLines.push(line);
+      });
       expect(provider).not.toBeNull();
 
       // The claim, over HTTP through the substrate's own client: the full

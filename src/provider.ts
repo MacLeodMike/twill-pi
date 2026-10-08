@@ -13,8 +13,31 @@
 // The seam takes an injectable `start` (defaulting to the real startProvider)
 // so the wiring is unit-testable without a real registry or poll loop.
 
+import { appendFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { startProvider, type ProviderConfig, type ProviderHandle } from "twill/provider";
 import type { TwillPiConfig } from "./config.js";
+
+/** Provider events go to a log file, never stdout — pi's TUI owns the
+ *  terminal and a console.log per poll corrupts the input field and footer. */
+const PROVIDER_LOG_PATH = join(homedir(), ".pi", "agent", "twill-provider.log");
+
+/**
+ * The lifecycle observer. Two jobs: (1) never write to stdout (TUI
+ * corruption); (2) drop the per-poll steady-state noise ("skipped"/"ignored"
+ * fire every poll for an un-released fulfilled claim) — only the meaningful
+ * events (fulfilled / failed / provisioning) are worth a log line. Logging
+ * must never throw into the loop.
+ */
+function logProviderEvent(line: string): void {
+  if (/\bskipped\b|\bignored\b/.test(line)) return;
+  try {
+    appendFileSync(PROVIDER_LOG_PATH, line + "\n");
+  } catch {
+    // A logging failure must never reach the provider loop.
+  }
+}
 
 /**
  * Adapt the substrate config to the provider's ProviderConfig and start the
@@ -29,6 +52,7 @@ import type { TwillPiConfig } from "./config.js";
 export function startEmbeddedProvider(
   config: TwillPiConfig,
   start: typeof startProvider = startProvider,
+  onEvent: (line: string) => void = logProviderEvent,
 ): ProviderHandle | null {
   const provider = config.provider;
   if (provider == null) return null;
@@ -37,9 +61,9 @@ export function startEmbeddedProvider(
     registry: config.registry,
     routes: provider.routes,
     parents: provider.parents,
-    // pi captures extension stdout; notify-per-poll would be noise, so the
-    // lifecycle observer logs.
-    onEvent: (line) => console.log(line),
+    // Lifecycle events go to a log file (never stdout — that corrupts the
+    // TUI); the per-poll skip/ignore noise is dropped. Injectable for tests.
+    onEvent,
   };
   if (provider.pollIntervalMs !== undefined) {
     providerConfig.pollIntervalMs = provider.pollIntervalMs;
