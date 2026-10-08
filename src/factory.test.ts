@@ -58,6 +58,7 @@ afterEach(async () => {
   for (const server of openServers.splice(0)) {
     await new Promise<void>((done) => server.close(() => done()));
   }
+  for (const dir of hermeticDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** A capturing ExtensionHost: tools, commands, and event handlers by name. */
@@ -105,11 +106,19 @@ function makeCtx(): { ctx: CommandContextShape; notes: Notification[] } {
   return { ctx, notes };
 }
 
-/** Run the factory against a fresh capturing host with TWILL_REGISTRY stubbed. */
+/** Run the factory against a fresh capturing host, hermetically: a temp
+ *  provider-less config (so the real ~/.pi/agent/twill-pi.json can never leak
+ *  a provider block into these tests once dogfooded) + TWILL_REGISTRY stubbed
+ *  (env wins over the file). */
+const hermeticDirs: string[] = [];
 function bootFactory(registry: string): ReturnType<typeof makeHost> {
+  const dir = mkdtempSync(join(tmpdir(), "twill-pi-boot-"));
+  hermeticDirs.push(dir);
+  const configPath = join(dir, "twill-pi.json");
+  writeFileSync(configPath, JSON.stringify({ registry })); // no provider block
   vi.stubEnv("TWILL_REGISTRY", registry);
   const captured = makeHost();
-  twillPi(captured.host);
+  twillPi(captured.host, { configPath });
   return captured;
 }
 

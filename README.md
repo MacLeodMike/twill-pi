@@ -94,7 +94,7 @@ Kind packages import the substrate through this package's `exports` map (`depend
 
 | Subpath | Exports |
 |---|---|
-| `twill-pi` (root) | default export: the extension factory itself (what pi loads — registers only `/twill`); plus `extensionState` and the structural host types (`ExtensionHost`, `CommandRegistration`, `CommandContextShape`), for tests that load the factory through the package specifier |
+| `twill-pi` (root) | default export: the extension factory itself (what pi loads — registers only `/twill`); plus `extensionState`, `setProviderStarterForTests` (the provider test seam), and the structural host types (`ExtensionHost`, `CommandRegistration`, `CommandContextShape`), for tests that load the factory through the package specifier |
 | `twill-pi/config` | `loadConfig`, `consumerFromConfig`, `TwillPiConfig`, `LoadConfigOptions`, `DEFAULT_CONFIG`, `DEFAULT_CONFIG_PATH`, `REGISTRY_ENV_VAR` |
 | `twill-pi/registry-client` | `RegistryClient`, `RegistryError`, `Consumer`, `RegistryHealth` |
 | `twill-pi/resolve-types` | `parseResolveResult` + the core §7/§8 wire types (`ResolveResult`, `ResolveDescriptor`, `StatusSurface`, `ClaimedRef`) |

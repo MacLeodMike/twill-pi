@@ -52,10 +52,6 @@ export interface ExtensionHost {
 export const extensionState: { config?: TwillPiConfig } = {};
 
 /**
- * Test seam: override the provider starter. pi calls the factory with the
- * real path (the default); tests substitute a fake to avoid a real poll loop.
- */
-/**
  * Test seam: substitute a fake provider starter (avoiding a real poll loop).
  * Also resets the running-handle state, so a test's session_start never leaks
  * a leftover handle into the next test. pi calls the factory with the real
