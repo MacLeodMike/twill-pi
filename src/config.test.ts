@@ -75,6 +75,129 @@ describe("loadConfig", () => {
   });
 });
 
+// Provider-block tests (embed-provider Task 1) — the optional embedded-provider
+// config. The block is fail-loud at load (never a half-started provider, plan
+// Review Focus #4) and route objects pass through VERBATIM: the provider's
+// exact-match binding needs them byte-identical to the route a claim carries,
+// so loadConfig must not normalize, strip, or rewrite anything inside them.
+
+describe("loadConfig: provider block", () => {
+  it("absent provider block → config.provider is undefined (bare installs unchanged)", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    writeFileSync(configPath, JSON.stringify({ registry: "http://file:9000/twill/v1alpha1" }));
+    const config = loadConfig({ configPath, env: {} });
+    expect(config.provider).toBeUndefined();
+    expect(config.registry).toBe("http://file:9000/twill/v1alpha1");
+  });
+
+  it("valid provider block parses through; route objects verbatim (unknown keys preserved)", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    const route = {
+      type: "local",
+      path: "/home/u/repos/ws-main",
+      match: { agentKind: "pi" },
+      futureKey: { nested: [1, 2] },
+    };
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        provider: { parents: ["ws-main", "ws-second"], routes: [route], pollIntervalMs: 250 },
+      }),
+    );
+    const config = loadConfig({ configPath, env: {} });
+    expect(config.provider).toEqual({
+      parents: ["ws-main", "ws-second"],
+      routes: [route],
+      pollIntervalMs: 250,
+    });
+  });
+
+  it("provider block without pollIntervalMs omits the key; the block survives TWILL_REGISTRY", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ provider: { parents: ["ws-main"], routes: [{ type: "local", path: "/x" }] } }),
+    );
+    const config = loadConfig({ configPath, env: { TWILL_REGISTRY: "http://env:9001/twill/v1alpha1" } });
+    expect(config.registry).toBe("http://env:9001/twill/v1alpha1");
+    expect(config.provider).toEqual({
+      parents: ["ws-main"],
+      routes: [{ type: "local", path: "/x" }],
+    });
+    expect("pollIntervalMs" in (config.provider ?? {})).toBe(false);
+  });
+
+  /** Write the JSON contents and assert loadConfig throws naming the file path AND the field. */
+  function expectFieldError(configPath: string, contents: unknown, field: string): void {
+    writeFileSync(configPath, JSON.stringify(contents));
+    expect(() => loadConfig({ configPath, env: {} })).toThrow(field);
+    expect(() => loadConfig({ configPath, env: {} })).toThrow(configPath);
+  }
+
+  it("provider present but not an object throws naming the field", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    expectFieldError(configPath, { provider: "nope" }, "provider: expected an object");
+    expectFieldError(configPath, { provider: ["not", "an", "object"] }, "provider: expected an object");
+  });
+
+  it("parents must be a non-empty array of strings", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    expectFieldError(configPath, { provider: {} }, "provider.parents");
+    expectFieldError(configPath, { provider: { parents: [] } }, "provider.parents");
+    expectFieldError(configPath, { provider: { parents: "ws-main" } }, "provider.parents");
+    expectFieldError(configPath, { provider: { parents: ["ws-main", 42] } }, "provider.parents");
+  });
+
+  it("routes must be a non-empty array", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    expectFieldError(
+      configPath,
+      { provider: { parents: ["ws-main"] } },
+      "provider.routes",
+    );
+    expectFieldError(
+      configPath,
+      { provider: { parents: ["ws-main"], routes: [] } },
+      "provider.routes",
+    );
+  });
+
+  it("a route that is not an object, or without a string type, throws naming its index", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    expectFieldError(
+      configPath,
+      { provider: { parents: ["ws-main"], routes: [{ path: "/x" }] } },
+      "provider.routes[0]",
+    );
+    expectFieldError(
+      configPath,
+      { provider: { parents: ["ws-main"], routes: [{ type: 7 }] } },
+      "provider.routes[0]",
+    );
+    expectFieldError(
+      configPath,
+      { provider: { parents: ["ws-main"], routes: ["not-an-object"] } },
+      "provider.routes[0]",
+    );
+  });
+
+  it("pollIntervalMs present but not a positive number throws", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    const valid = { parents: ["ws-main"], routes: [{ type: "local", path: "/x" }] };
+    expectFieldError(configPath, { provider: { ...valid, pollIntervalMs: 0 } }, "provider.pollIntervalMs");
+    expectFieldError(configPath, { provider: { ...valid, pollIntervalMs: -5 } }, "provider.pollIntervalMs");
+    expectFieldError(configPath, { provider: { ...valid, pollIntervalMs: "fast" } }, "provider.pollIntervalMs");
+  });
+});
+
 describe("consumerFromConfig", () => {
   it("declares agentKind pi and principal pi/<version>@<location> (version from package.json)", () => {
     const consumer = consumerFromConfig(DEFAULT_CONFIG);

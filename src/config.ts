@@ -6,6 +6,12 @@
 // loads config at load time, so a broken config fails loud there instead
 // of surfacing mid-tool-call.
 //
+// The optional `provider` block (embed-provider Task 1) configures the
+// embedded twill provider. It is validated the same way — fail loud at
+// load, never a half-started provider — and its route objects pass through
+// VERBATIM: the provider's exact-match binding deep-equals a claim's route
+// against them, so no normalization, stripping, or rewriting here.
+//
 // consumerFromConfig derives the core §7.1 consumer tuple: agentKind "pi",
 // principal "pi/<version>@<location>" with the version read from this
 // package's own package.json (self-declared, untrusted per core §5).
@@ -14,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Route } from "twill/provider";
 import type { Consumer } from "./registry-client.js";
 
 export interface TwillPiConfig {
@@ -25,6 +32,21 @@ export interface TwillPiConfig {
   claimTimeoutMs: number;
   /** Poll interval for the claim-and-poll loop. */
   pollIntervalMs: number;
+  /** The embedded provider config; absent → no provider (bare installs). */
+  provider?: TwillPiProviderConfig;
+}
+
+/** The optional embedded-provider block (embed-provider Task 1). Present →
+ *  the factory starts the twill provider loop against the shared registry. */
+export interface TwillPiProviderConfig {
+  /** Parent workspace names the provider polls for claims. */
+  parents: string[];
+  /** The verbatim route objects this provider owns — a claim is this
+   *  provider's iff its route deep-equals one of these, so they must stay
+   *  byte-identical to what the parent Workspace document carries. */
+  routes: Route[];
+  /** Provider poll interval override (the loop defaults itself otherwise). */
+  pollIntervalMs?: number;
 }
 
 /** The pinned defaults (plan's Global Constraints). */
@@ -94,8 +116,58 @@ export function loadConfig(options: LoadConfigOptions = {}): TwillPiConfig {
     agentLocation: field(parsed, "agentLocation", DEFAULT_CONFIG.agentLocation),
     claimTimeoutMs: field(parsed, "claimTimeoutMs", DEFAULT_CONFIG.claimTimeoutMs),
     pollIntervalMs: field(parsed, "pollIntervalMs", DEFAULT_CONFIG.pollIntervalMs),
+    provider: parseProviderBlock(parsed, configPath),
   };
   return withEnvOverride(config, env);
+}
+
+/** Parse + validate the optional `provider` block (fail loud at load:
+ *  the factory must never start a half-validated provider). Absent block →
+ *  undefined. Route objects pass through verbatim — the provider's
+ *  exact-match binding needs them byte-identical to the route a claim
+ *  carries, so only shape is checked, contents are never touched. */
+function parseProviderBlock(
+  file: Record<string, unknown>,
+  configPath: string,
+): TwillPiProviderConfig | undefined {
+  if (!("provider" in file)) return undefined;
+  const block = file["provider"];
+  if (!isRecord(block)) {
+    throw new Error(
+      `${configPath}: provider: expected an object, got ${Array.isArray(block) ? "an array" : typeof block}`,
+    );
+  }
+
+  const parents = block["parents"];
+  if (
+    !Array.isArray(parents) ||
+    parents.length === 0 ||
+    parents.some((parent) => typeof parent !== "string")
+  ) {
+    throw new Error(`${configPath}: provider.parents: expected a non-empty array of strings`);
+  }
+
+  const routes = block["routes"];
+  if (!Array.isArray(routes) || routes.length === 0) {
+    throw new Error(`${configPath}: provider.routes: expected a non-empty array of route objects`);
+  }
+  for (let i = 0; i < routes.length; i++) {
+    const route = routes[i];
+    if (!isRecord(route) || typeof route["type"] !== "string") {
+      throw new Error(`${configPath}: provider.routes[${i}]: expected an object with a string "type"`);
+    }
+  }
+
+  const pollIntervalMs = block["pollIntervalMs"];
+  if (pollIntervalMs !== undefined && !(typeof pollIntervalMs === "number" && pollIntervalMs > 0)) {
+    throw new Error(`${configPath}: provider.pollIntervalMs: expected a positive number`);
+  }
+
+  return {
+    parents,
+    routes,
+    ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}),
+  };
 }
 
 /** The TWILL_REGISTRY override step (applied last — env wins). */
