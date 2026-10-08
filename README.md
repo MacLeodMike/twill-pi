@@ -4,7 +4,7 @@ The twill fabric's pi **substrate** package — a pi extension that is also an i
 
 **You want [twill-pi-workspace](../twill-pi-workspace) for actual workspaces** (the `twill_workspace_resolve` / `twill_workspace_attach` / `twill_workspace_claim` tools and the path-scoped write guard). twill-pi alone is the base layer those tools consume. Install both packages; pi loads each in its own module root.
 
-It is a pure HTTP consumer of the registry's v1alpha1 API (the same contract the `twill` CLI exercises); it imports nothing from the twill repo. Design contracts (in the twill repo): the fabric core spec (`docs/superpowers/specs/2026-10-04-twill-fabric-core.md`) and the workspace spec (`docs/superpowers/specs/2026-10-04-twill-workspace.md`).
+It is a pure HTTP consumer of the registry's v1alpha1 API (the same contract the `twill` CLI exercises) — with one config-gated exception: the [embedded provider](#embedded-provider) imports the provider loop from the twill repo (`twill/provider`) and runs it in-process. Design contracts (in the twill repo): the fabric core spec (`docs/superpowers/specs/2026-10-04-twill-fabric-core.md`), the workspace spec (`docs/superpowers/specs/2026-10-04-twill-workspace.md`), and the localhost provider spec (`docs/superpowers/specs/2026-10-07-twill-localhost-provider.md`).
 
 ## Install
 
@@ -42,8 +42,51 @@ No build step — pi loads `index.ts` at runtime via jiti. Restart pi after inst
 - `registry` — the registry's v1alpha1 root. The `TWILL_REGISTRY` environment variable overrides it (env wins).
 - `agentLocation` — the consumer location matched against route `match` blocks (used in the consumer tuple below).
 - `claimTimeoutMs` / `pollIntervalMs` — the claim loop's defaults, consumed by kind packages (twill-pi-workspace's claim tool).
+- `provider` — the optional embedded-provider block; see [Embedded provider](#embedded-provider).
 
 Malformed JSON fails loud at extension load, not mid-command.
+
+## Embedded provider
+
+The substrate can run the fabric's **provider** in-process: with a `provider` block in the config, one install of twill-pi is a registry client *and* a provider against the same registry — no separate `twill provider` daemon to run. That is the homelab one-install story: install twill-pi (+ the kind packages), configure the block, and claims against your workspaces materialize on this machine while the same extension serves the tools that claim them. The provider loop itself lives in the [twill repo](../twill) (`src/provider/loop.ts`), consumed through the `twill` dependency's `twill/provider` export.
+
+A complete config with the block:
+
+```json
+{
+  "registry": "http://localhost:8080/twill/v1alpha1",
+  "agentLocation": "workstation",
+  "provider": {
+    "parents": ["workstation-repos"],
+    "routes": [
+      {
+        "match": { "agentLocation": "workstation" },
+        "type": "local",
+        "path": "/home/you/repos/workstation-repos",
+        "precondition": {
+          "steps": [
+            { "type": "gitClone", "url": "https://git.example/you/workstation-repos.git", "ref": "main" }
+          ]
+        }
+      }
+    ],
+    "pollIntervalMs": 5000
+  }
+}
+```
+
+- `provider.parents` — the parent Workspace names this provider polls for claims (required: a non-empty array of strings).
+- `provider.routes` — the **verbatim** route objects this provider owns (required: a non-empty array of route objects, each with a string `type`). A claim is this provider's iff its `spec.claim.route` deep-equals one of these, so each route must stay byte-identical to the route the parent Workspace document carries. Only the shape is validated; contents pass through untouched.
+- `provider.pollIntervalMs` — optional poll-interval override (a positive number; the loop defaults to 5000 ms).
+
+Rules:
+
+- **Explicit config.** No `provider` block → no provider, no timer — a bare install is exactly the substrate-only shape. A malformed block (missing or empty `parents`/`routes`, a route without a string `type`, a non-positive `pollIntervalMs`) fails loud at extension load, never a half-started provider.
+- **The registry is shared.** The provider polls the registry named by the top-level `registry` field — the same endpoint the registry client uses, including the `TWILL_REGISTRY` override.
+- **Lifecycle.** The extension factory starts the loop when the block is configured, and stops it on pi's `session_shutdown`. Lifecycle events (claim fulfilled / failed / ignored / skipped) are logged to stdout — pi captures extension stdout.
+- **v1 scope.** The provider materializes `gitClone` and `worktree` preconditions on local (`type: "local"`) routes only; `pvcBind`, `remoteMkdir`, and `mountCheck` fail loud as unsupported, and a non-local route is never materialized at its remote path.
+
+The in-process loop is proven end-to-end by `src/provider.integration.test.ts`: a real in-process registry + the embedded provider + a claim over HTTP → the child Workspace materializes on disk and resolves with `ready: true`.
 
 ## Substrate exports
 
@@ -73,7 +116,7 @@ The substrate provides the **class, never an instance**. Pi loads installed pack
 
 ## Lifecycle
 
-The substrate holds no session state: on pi `/reload` (or any session shutdown) the factory simply re-runs. Kind packages that keep attach state start unattached after a reload — re-derivation from transcript entries is a later enhancement (see twill-pi-workspace's README for its lifecycle section).
+The substrate holds no session state: on pi `/reload` (or any session shutdown) the factory simply re-runs. The embedded provider (when configured) is the one exception — the factory stops it on `session_shutdown` (see [Embedded provider](#embedded-provider)). Kind packages that keep attach state start unattached after a reload — re-derivation from transcript entries is a later enhancement (see twill-pi-workspace's README for its lifecycle section).
 
 ## Develop
 
