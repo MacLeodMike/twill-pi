@@ -7,10 +7,11 @@
 // twill-pi-workspace, which depends on this package's exports.
 //
 // pi loads this module at runtime via jiti (no build step); the default
-// export is the extension factory pi calls with its ExtensionAPI. Per pi's
-// lifecycle rules the factory starts no processes, sockets, or timers —
-// config load is a synchronous file read; the /twill handler's registry
-// fetch happens per command invocation, not at load.
+// export is the extension factory pi calls with its ExtensionAPI. The factory
+// starts no processes, sockets, or timers UNLESS a `provider` block is
+// configured — the embedded provider is the deliberate, config-gated exception
+// (stopped on session_shutdown). Config load is a synchronous file read; the
+// /twill handler's registry fetch happens per command invocation, not at load.
 //
 // The factory's parameter is typed structurally (not imported from the pi
 // package) so the module typechecks and tests outside pi; pi's real
@@ -18,6 +19,8 @@
 
 import { loadConfig, type TwillPiConfig } from "./src/config.js";
 import { RegistryClient, type RegistryHealth } from "./src/registry-client.js";
+import { startEmbeddedProvider } from "./src/provider.js";
+import { startProvider } from "twill/provider";
 
 /** The structural minimum of pi's ExtensionContext the /twill handler uses. */
 export interface CommandContextShape {
@@ -47,6 +50,15 @@ export interface ExtensionHost {
  */
 export const extensionState: { config?: TwillPiConfig } = {};
 
+/**
+ * Test seam: override the provider starter. pi calls the factory with the
+ * real path (the default); tests substitute a fake to avoid a real poll loop.
+ */
+let providerStarter: typeof startProvider = startProvider;
+export function setProviderStarterForTests(starter: typeof startProvider): void {
+  providerStarter = starter;
+}
+
 /** The /twill command body: report health + endpoint through ctx.ui.notify. */
 function reportHealth(ctx: CommandContextShape, registry: string, health: RegistryHealth): void {
   const parts = [
@@ -61,8 +73,8 @@ function reportHealth(ctx: CommandContextShape, registry: string, health: Regist
   ctx.ui.notify(parts.join(" — "), type);
 }
 
-export default function twillPi(pi: ExtensionHost): void {
-  const config = loadConfig();
+export default function twillPi(pi: ExtensionHost, options: { configPath?: string } = {}): void {
+  const config = loadConfig({ configPath: options.configPath });
   extensionState.config = config;
 
   const client = new RegistryClient(config.registry);
@@ -81,4 +93,14 @@ export default function twillPi(pi: ExtensionHost): void {
       reportHealth(ctx, config.registry, health);
     },
   });
+
+  // The embedded provider is the deliberate, config-gated exception to the
+  // "factory starts no processes/sockets/timers" invariant: it runs iff a
+  // `provider` block is configured, and stops on session_shutdown.
+  const provider = startEmbeddedProvider(config, providerStarter);
+  if (provider !== null) {
+    pi.on("session_shutdown", () => {
+      provider.stop();
+    });
+  }
 }

@@ -11,9 +11,15 @@
 // to the mock's base URL (env wins over the file).
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, afterEach, vi } from "vitest";
+import type { ProviderConfig, ProviderHandle } from "twill/provider";
+import { startProvider } from "twill/provider";
 import twillPi, {
   extensionState,
+  setProviderStarterForTests,
   type CommandContextShape,
   type CommandRegistration,
   type ExtensionHost,
@@ -46,6 +52,9 @@ async function closedPortBase(): Promise<string> {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  // Reset the provider starter to the real path so a fake never leaks across
+  // tests (the override is module-global).
+  setProviderStarterForTests(startProvider);
   for (const server of openServers.splice(0)) {
     await new Promise<void>((done) => server.close(() => done()));
   }
@@ -178,5 +187,82 @@ describe("substrate factory", () => {
     expect(notes[0]!.type).toBe("error");
     expect(notes[0]!.message).toContain(base);
     expect(notes[0]!.message).toContain("unreachable");
+  });
+});
+
+// Provider wiring (embed-provider Task 2): the factory starts the embedded
+// provider iff a `provider` block is configured, and stops it on
+// session_shutdown. A fake starter (setProviderStarterForTests) avoids a real
+// poll loop; the provider block is file-only config, so these tests write a
+// temp twill-pi.json and pass its path via the factory's second parameter
+describe("embedded provider wiring", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Write a twill-pi.json carrying a provider block; return its path. */
+  function configWithProvider(registry: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "twill-pi-factory-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "twill-pi.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        registry,
+        provider: {
+          parents: ["workstation-repos"],
+          routes: [{ type: "local", match: { agentLocation: "workstation" }, path: "/srv/repos" }],
+        },
+      }),
+    );
+    return path;
+  }
+
+  /** A fake starter capturing the ProviderConfig and recording stop() calls. */
+  function fakeStarter(): {
+    start: (c: ProviderConfig) => ProviderHandle;
+    calls: ProviderConfig[];
+    stops: number;
+  } {
+    const state = { calls: [] as ProviderConfig[], stops: 0 };
+    return {
+      start(config: ProviderConfig): ProviderHandle {
+        state.calls.push(config);
+        return { stop: () => { state.stops += 1; } };
+      },
+      get calls() { return state.calls; },
+      get stops() { return state.stops; },
+    };
+  }
+
+  it("starts the provider when a provider block is configured and stops it on session_shutdown", () => {
+    const registry = "http://127.0.0.1:1/twill/v1alpha1";
+    const configPath = configWithProvider(registry);
+    const starter = fakeStarter();
+    setProviderStarterForTests(starter.start);
+    const captured = makeHost();
+    twillPi(captured.host, { configPath });
+
+    // The provider started with the substrate's registry.
+    expect(starter.calls).toHaveLength(1);
+    expect(starter.calls[0]!.registry).toBe(registry);
+    expect(starter.calls[0]!.parents).toEqual(["workstation-repos"]);
+
+    // A session_shutdown handler is registered and stops the provider exactly once.
+    const shutdowns = captured.handlers.get("session_shutdown") ?? [];
+    expect(shutdowns).toHaveLength(1);
+    shutdowns[0]!(undefined as never);
+    expect(starter.stops).toBe(1);
+  });
+
+  it("starts nothing when no provider block is configured (bare install)", () => {
+    const registry = "http://127.0.0.1:1/twill/v1alpha1";
+    const starter = fakeStarter();
+    setProviderStarterForTests(starter.start);
+    const captured = bootFactory(registry); // no provider block (default config path, no file)
+    expect(starter.calls).toHaveLength(0);
+    expect(captured.handlers.get("session_shutdown") ?? []).toHaveLength(0);
   });
 });
