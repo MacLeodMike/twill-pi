@@ -237,7 +237,7 @@ describe("embedded provider wiring", () => {
     };
   }
 
-  it("starts the provider when a provider block is configured and stops it on session_shutdown", () => {
+  it("does NOT start the provider at load (pi lifecycle: no timers in the factory)", () => {
     const registry = "http://127.0.0.1:1/twill/v1alpha1";
     const configPath = configWithProvider(registry);
     const starter = fakeStarter();
@@ -245,24 +245,45 @@ describe("embedded provider wiring", () => {
     const captured = makeHost();
     twillPi(captured.host, { configPath });
 
-    // The provider started with the substrate's registry.
+    // The factory registers handlers but starts nothing: no poll loop at load.
+    expect(starter.calls).toHaveLength(0);
+    // Both lifecycle handlers are registered (provider is configured).
+    expect(captured.handlers.get("session_start") ?? []).toHaveLength(1);
+    expect(captured.handlers.get("session_shutdown") ?? []).toHaveLength(1);
+  });
+
+  it("starts the provider on session_start with the substrate's registry and stops it on session_shutdown", () => {
+    const registry = "http://127.0.0.1:1/twill/v1alpha1";
+    const configPath = configWithProvider(registry);
+    const starter = fakeStarter();
+    setProviderStarterForTests(starter.start);
+    const captured = makeHost();
+    twillPi(captured.host, { configPath });
+
+    // Fire session_start: the provider starts with the substrate's registry.
+    captured.handlers.get("session_start")![0]!(undefined as never);
     expect(starter.calls).toHaveLength(1);
     expect(starter.calls[0]!.registry).toBe(registry);
     expect(starter.calls[0]!.parents).toEqual(["workstation-repos"]);
 
-    // A session_shutdown handler is registered and stops the provider exactly once.
+    // A second session_start is a no-op (idempotent — no double-start).
+    captured.handlers.get("session_start")![0]!(undefined as never);
+    expect(starter.calls).toHaveLength(1);
+
+    // session_shutdown stops the provider exactly once; a second is a no-op.
     const shutdowns = captured.handlers.get("session_shutdown") ?? [];
-    expect(shutdowns).toHaveLength(1);
+    shutdowns[0]!(undefined as never);
+    expect(starter.stops).toBe(1);
     shutdowns[0]!(undefined as never);
     expect(starter.stops).toBe(1);
   });
 
-  it("starts nothing when no provider block is configured (bare install)", () => {
+  it("registers no lifecycle handlers when no provider block is configured (bare install)", () => {
     const registry = "http://127.0.0.1:1/twill/v1alpha1";
     const starter = fakeStarter();
     setProviderStarterForTests(starter.start);
     const captured = bootFactory(registry); // no provider block (default config path, no file)
     expect(starter.calls).toHaveLength(0);
-    expect(captured.handlers.get("session_shutdown") ?? []).toHaveLength(0);
+    expect(captured.handlers.size).toBe(0); // no session_start/session_shutdown at all
   });
 });

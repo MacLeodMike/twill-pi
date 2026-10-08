@@ -83,7 +83,7 @@ Rules:
 
 - **Explicit config.** No `provider` block → no provider, no timer — a bare install is exactly the substrate-only shape. A malformed block (missing or empty `parents`/`routes`, a route without a string `type`, a non-positive `pollIntervalMs`) fails loud at extension load, never a half-started provider.
 - **The registry is shared.** The provider polls the registry named by the top-level `registry` field — the same endpoint the registry client uses, including the `TWILL_REGISTRY` override.
-- **Lifecycle.** The extension factory starts the loop when the block is configured, and stops it on pi's `session_shutdown`. Lifecycle events (claim fulfilled / failed / ignored / skipped) are logged to stdout — pi captures extension stdout.
+- **Lifecycle.** Per pi's rule (no timers in the factory), the factory only registers handlers: the loop starts on `session_start` when the block is configured and stops on `session_shutdown` (both idempotent). Lifecycle events (claim fulfilled / failed / ignored / skipped) are logged to stdout — pi captures extension stdout.
 - **v1 scope.** The provider materializes `gitClone` and `worktree` preconditions on local (`type: "local"`) routes only; `pvcBind`, `remoteMkdir`, and `mountCheck` fail loud as unsupported, and a non-local route is never materialized at its remote path.
 
 The in-process loop is proven end-to-end by `src/provider.integration.test.ts`: a real in-process registry + the embedded provider + a claim over HTTP → the child Workspace materializes on disk and resolves with `ready: true`.
@@ -116,7 +116,7 @@ The substrate provides the **class, never an instance**. Pi loads installed pack
 
 ## Lifecycle
 
-The substrate holds no session state: on pi `/reload` (or any session shutdown) the factory simply re-runs. The embedded provider (when configured) is the one exception — the factory stops it on `session_shutdown` (see [Embedded provider](#embedded-provider)). Kind packages that keep attach state start unattached after a reload — re-derivation from transcript entries is a later enhancement (see twill-pi-workspace's README for its lifecycle section).
+The substrate holds no session state: on pi `/reload` (or any session shutdown) the factory simply re-runs. The embedded provider (when configured) is the one exception — the factory registers lifecycle handlers so the loop starts on `session_start` and stops on `session_shutdown` (see [Embedded provider](#embedded-provider)). Kind packages that keep attach state start unattached after a reload — re-derivation from transcript entries is a later enhancement (see twill-pi-workspace's README for its lifecycle section).
 
 ## Develop
 
