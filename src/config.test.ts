@@ -35,6 +35,7 @@ describe("loadConfig", () => {
       agentLocation: "workstation",
       claimTimeoutMs: 600_000,
       pollIntervalMs: 7_000,
+      writeGuard: true,
     });
     expect(config).toEqual(DEFAULT_CONFIG);
   });
@@ -49,7 +50,22 @@ describe("loadConfig", () => {
       agentLocation: "workstation",
       claimTimeoutMs: 600_000,
       pollIntervalMs: 500,
+      writeGuard: true,
     });
+  });
+
+  it("writeGuard: defaults true, honors an explicit false, ignores a non-boolean", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "twill-pi.json");
+    // absent → default true
+    writeFileSync(configPath, JSON.stringify({}));
+    expect(loadConfig({ configPath, env: {} }).writeGuard).toBe(true);
+    // explicit false → false
+    writeFileSync(configPath, JSON.stringify({ writeGuard: false }));
+    expect(loadConfig({ configPath, env: {} }).writeGuard).toBe(false);
+    // a non-boolean value keeps the default (the field() typeof check)
+    writeFileSync(configPath, JSON.stringify({ writeGuard: "no" }));
+    expect(loadConfig({ configPath, env: {} }).writeGuard).toBe(true);
   });
 
   it("TWILL_REGISTRY env wins over both the file and the default", () => {

@@ -15,6 +15,7 @@ function configWithProvider(): TwillPiConfig {
     agentLocation: "workstation",
     claimTimeoutMs: 600_000,
     pollIntervalMs: 7_000,
+    writeGuard: true,
     provider: {
       parents: ["workstation-repos"],
       routes: [{ type: "local", match: { agentLocation: "workstation" }, path: "~/repos/workstation-repos" }],
@@ -30,6 +31,7 @@ function configWithoutProvider(): TwillPiConfig {
     agentLocation: "workstation",
     claimTimeoutMs: 600_000,
     pollIntervalMs: 7_0e3,
+    writeGuard: true,
   };
 }
 

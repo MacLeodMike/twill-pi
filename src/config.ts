@@ -32,6 +32,11 @@ export interface TwillPiConfig {
   claimTimeoutMs: number;
   /** Poll interval for the claim-and-poll loop. */
   pollIntervalMs: number;
+  /** Confine the write/edit tools to the attached workspace root (a kind
+   *  package's guard reads this; the substrate only parses + exposes it).
+   *  Guardrail, not a security boundary — bash and reads are never guarded.
+   *  Default true; set false to disable the guard entirely. */
+  writeGuard: boolean;
   /** The embedded provider config; absent → no provider (bare installs). */
   provider?: TwillPiProviderConfig;
 }
@@ -55,6 +60,7 @@ export const DEFAULT_CONFIG: TwillPiConfig = {
   agentLocation: "workstation",
   claimTimeoutMs: 600_000,
   pollIntervalMs: 7_000,
+  writeGuard: true,
 };
 
 /** Where pi keeps per-extension config; loadConfig's default path. */
@@ -74,8 +80,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** One string-or-number config field from the file, with the default kept otherwise. */
-function field<T extends string | number>(
+/** One string/number/boolean config field from the file, with the default kept otherwise. */
+function field<T extends string | number | boolean>(
   file: Record<string, unknown>,
   key: string,
   fallback: T,
@@ -116,6 +122,7 @@ export function loadConfig(options: LoadConfigOptions = {}): TwillPiConfig {
     agentLocation: field(parsed, "agentLocation", DEFAULT_CONFIG.agentLocation),
     claimTimeoutMs: field(parsed, "claimTimeoutMs", DEFAULT_CONFIG.claimTimeoutMs),
     pollIntervalMs: field(parsed, "pollIntervalMs", DEFAULT_CONFIG.pollIntervalMs),
+    writeGuard: field(parsed, "writeGuard", DEFAULT_CONFIG.writeGuard),
     provider: parseProviderBlock(parsed, configPath),
   };
   return withEnvOverride(config, env);
