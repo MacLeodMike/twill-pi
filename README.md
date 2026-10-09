@@ -35,13 +35,15 @@ No build step — pi loads `index.ts` at runtime via jiti. Restart pi after inst
   "registry": "http://localhost:8080/twill/v1alpha1",
   "agentLocation": "workstation",
   "claimTimeoutMs": 600000,
-  "pollIntervalMs": 7000
+  "pollIntervalMs": 7000,
+  "writeGuard": true
 }
 ```
 
 - `registry` — the registry's v1alpha1 root. The `TWILL_REGISTRY` environment variable overrides it (env wins).
 - `agentLocation` — the consumer location matched against route `match` blocks (used in the consumer tuple below).
 - `claimTimeoutMs` / `pollIntervalMs` — the claim loop's defaults, consumed by kind packages (twill-pi-workspace's claim tool).
+- `writeGuard` — parsed here, consumed by kind packages: twill-pi-workspace's write guard confines its write/edit tools to the attached workspace root when this is `true` (the default). The substrate only parses + exposes it. Set `false` to disable the guard.
 - `provider` — the optional embedded-provider block; see [Embedded provider](#embedded-provider).
 
 Malformed JSON fails loud at extension load, not mid-command.
