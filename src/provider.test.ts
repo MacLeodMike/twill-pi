@@ -4,7 +4,7 @@
 // runs; the assertions are on the adapted ProviderConfig and the null case.
 
 import { describe, it, expect } from "vitest";
-import type { ProviderConfig, ProviderHandle } from "twill/provider";
+import type { ProviderConfig, ProviderHandle } from "@bitwise-operations/twill/provider";
 import { startEmbeddedProvider } from "./provider.js";
 import type { TwillPiConfig } from "./config.js";
 

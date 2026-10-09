@@ -21,7 +21,7 @@
 import { loadConfig, type TwillPiConfig } from "./src/config.js";
 import { RegistryClient, type RegistryHealth } from "./src/registry-client.js";
 import { startEmbeddedProvider } from "./src/provider.js";
-import { startProvider, type ProviderHandle } from "twill/provider";
+import { startProvider, type ProviderHandle } from "@bitwise-operations/twill/provider";
 
 /** The structural minimum of pi's ExtensionContext the /twill handler uses. */
 export interface CommandContextShape {

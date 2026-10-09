@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Route } from "twill/provider";
+import type { Route } from "@bitwise-operations/twill/provider";
 import type { Consumer } from "./registry-client.js";
 
 export interface TwillPiConfig {

@@ -1,7 +1,7 @@
 {
-  "name": "twill-pi",
-  "version": "0.2.0",
-  "description": "Substrate for twill fabric pi adapters — config, registry client, consumer identity, per-kind session state; registers the /twill status command. The workspace tools live in twill-pi-workspace.",
+  "name": "@bitwise-operations/twill-pi",
+  "version": "0.1.0",
+  "description": "pi substrate for the twill fabric: config, registry client, consumer identity, per-kind session state, the embedded provider, and the /twill status command.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -20,7 +20,11 @@
     "README.md"
   ],
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "twill",
+    "pi-extension",
+    "agent",
+    "workspace"
   ],
   "pi": {
     "extensions": [
@@ -31,7 +35,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "twill": "file:/home/example/repos/twill"
+    "@bitwise-operations/twill": "file:/home/example/repos/twill"
   },
   "peerDependencies": {
     "typebox": "*"
@@ -41,5 +45,9 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MacLeodMike/twill-pi.git"
   }
 }

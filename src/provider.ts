@@ -16,7 +16,7 @@
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { startProvider, type ProviderConfig, type ProviderHandle } from "twill/provider";
+import { startProvider, type ProviderConfig, type ProviderHandle } from "@bitwise-operations/twill/provider";
 import type { TwillPiConfig } from "./config.js";
 
 /** Provider events go to a log file, never stdout — pi's TUI owns the

@@ -15,8 +15,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import type { ProviderConfig, ProviderHandle } from "twill/provider";
-import { startProvider } from "twill/provider";
+import type { ProviderConfig, ProviderHandle } from "@bitwise-operations/twill/provider";
+import { startProvider } from "@bitwise-operations/twill/provider";
 import twillPi, {
   extensionState,
   setProviderStarterForTests,
