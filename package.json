@@ -1,6 +1,6 @@
 {
   "name": "@bitwise-operations/twill-pi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "pi substrate for the twill fabric: config, registry client, consumer identity, per-kind session state, the embedded provider, and the /twill status command.",
   "license": "MIT",
   "type": "module",
@@ -35,7 +35,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bitwise-operations/twill": "file:/home/example/repos/twill"
+    "@bitwise-operations/twill": "^0.1.1"
   },
   "peerDependencies": {
     "typebox": "*"
